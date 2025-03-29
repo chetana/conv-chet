@@ -1,10 +1,14 @@
 package repository
 
 import (
-	"errors"
+	"context"
+	"log"
 
+	"github.com/chetana/conv-chet/internal/app"
 	"github.com/chetana/conv-chet/internal/model"
 )
+
+const collectionName = "todos"
 
 // TodoRepository est une interface pour accéder aux données des tâches.
 type TodoRepository interface {
@@ -15,59 +19,91 @@ type TodoRepository interface {
 	DeleteTodo(id string) error
 }
 
-// todoRepositoryImpl est une implémentation "en mémoire" de TodoRepository.
-type todoRepositoryImpl struct {
-	todos map[string]*model.Todo // Stocke les tâches dans une map (ID -> Todo)
-}
+// todoRepositoryImpl est une implémentation Firestore de TodoRepository.
+type todoRepositoryImpl struct{}
 
 // NewTodoRepository crée une nouvelle instance de todoRepositoryImpl.
 func NewTodoRepository() TodoRepository {
-	return &todoRepositoryImpl{
-		todos: make(map[string]*model.Todo), // Initialise la map
-	}
+	return &todoRepositoryImpl{}
 }
 
 // GetTodoByID récupère une tâche par son ID.
 func (r *todoRepositoryImpl) GetTodoByID(id string) (*model.Todo, error) {
-	todo, ok := r.todos[id] // Vérifie si la tâche existe dans la map
-	if !ok {
-		return nil, errors.New("todo not found") // Retourne une erreur si la tâche n'existe pas
+	ctx := context.Background()
+	doc, err := app.FirestoreClient.Collection(collectionName).Doc(id).Get(ctx)
+	if err != nil {
+		log.Printf("Failed to get todo: %v", err)
+		return nil, err
 	}
-	return todo, nil // Retourne la tâche et nil (pas d'erreur)
+	var todo model.Todo
+	err = doc.DataTo(&todo)
+	if err != nil {
+		log.Printf("Failed to convert data to todo: %v", err)
+		return nil, err
+	}
+	todo.ID = doc.Ref.ID // Récupérer l'ID du document
+	return &todo, nil
 }
 
 // GetAllTodos récupère toutes les tâches.
 func (r *todoRepositoryImpl) GetAllTodos() ([]*model.Todo, error) {
-	todos := []*model.Todo{} // Crée une slice vide pour stocker les tâches
-	for _, todo := range r.todos {
-		todos = append(todos, todo) // Ajoute chaque tâche à la slice
+	ctx := context.Background()
+	iter := app.FirestoreClient.Collection(collectionName).Documents(ctx)
+	defer iter.Stop()
+
+	var todos []*model.Todo
+	for {
+		doc, err := iter.Next()
+		if err != nil {
+			log.Printf("Failed to iterate: %v", err)
+			break
+		}
+		if doc == nil {
+			break
+		}
+
+		var todo model.Todo
+		err = doc.DataTo(&todo)
+		if err != nil {
+			log.Printf("Failed to convert data to todo: %v", err)
+			continue
+		}
+
+		todo.ID = doc.Ref.ID // Récupérer l'ID du document
+		todos = append(todos, &todo)
 	}
-	return todos, nil // Retourne la slice de tâches et nil (pas d'erreur)
+	return todos, nil
 }
 
 // CreateTodo crée une nouvelle tâche.
 func (r *todoRepositoryImpl) CreateTodo(todo *model.Todo) error {
-	if _, ok := r.todos[todo.ID]; ok {
-		return errors.New("todo already exists") // Retourne une erreur si la tâche existe déjà
+	ctx := context.Background()
+	_, err := app.FirestoreClient.Collection(collectionName).Doc(todo.ID).Set(ctx, todo)
+	if err != nil {
+		log.Printf("Failed to create todo: %v", err)
+		return err
 	}
-	r.todos[todo.ID] = todo // Ajoute la tâche à la map
-	return nil              // Retourne nil (pas d'erreur)
+	return nil
 }
 
 // UpdateTodo met à jour une tâche existante.
 func (r *todoRepositoryImpl) UpdateTodo(todo *model.Todo) error {
-	if _, ok := r.todos[todo.ID]; !ok {
-		return errors.New("todo not found") // Retourne une erreur si la tâche n'existe pas
+	ctx := context.Background()
+	_, err := app.FirestoreClient.Collection(collectionName).Doc(todo.ID).Set(ctx, todo)
+	if err != nil {
+		log.Printf("Failed to update todo: %v", err)
+		return err
 	}
-	r.todos[todo.ID] = todo // Met à jour la tâche dans la map
-	return nil              // Retourne nil (pas d'erreur)
+	return nil
 }
 
 // DeleteTodo supprime une tâche par son ID.
 func (r *todoRepositoryImpl) DeleteTodo(id string) error {
-	if _, ok := r.todos[id]; !ok {
-		return errors.New("todo not found") // Retourne une erreur si la tâche n'existe pas
+	ctx := context.Background()
+	_, err := app.FirestoreClient.Collection(collectionName).Doc(id).Delete(ctx)
+	if err != nil {
+		log.Printf("Failed to delete todo: %v", err)
+		return err
 	}
-	delete(r.todos, id) // Supprime la tâche de la map
-	return nil          // Retourne nil (pas d'erreur)
+	return nil
 }
